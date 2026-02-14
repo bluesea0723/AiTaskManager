@@ -103,6 +103,54 @@ fun AppScreen() {
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        //振り返りコーチ
+        Button(
+            onClick = {
+                scope.launch {
+                    if (signedInAccount == null) {
+                        chatLog = "先にログインしてください"
+                        return@launch
+                    }
+                    chatLog = "今日の活動を分析中..."
+
+                    // 1. カレンダーから今日の予定を取得
+                    val eventsText = CalendarHelper().fetchEvents(context, signedInAccount!!)
+
+                    // 2. AIに「コーチ」として振る舞ってもらうプロンプト
+                    val prompt = """
+                        あなたはユーザーの親身な専属コーチです。
+                        以下の「今日のスケジュール」と、ユーザーが入力した「一言感想」を元に、
+                        今日一日の振り返りフィードバックを作成してください。
+
+                        【ルール】
+                        ・まずはユーザーの頑張りを具体的に褒めてください。
+                        ・スケジュールが過密だった場合は、休息を促してください。
+                        ・予定が少なかった場合は、リラックスできたことを肯定してください。
+                        ・最後に、明日に向けたポジティブな一言アドバイスをください。
+                        ・口調は優しく、励ますようにしてください。
+
+                        【今日のスケジュール】
+                        $eventsText
+
+                        【ユーザーの一言感想】
+                        $inputText
+                    """.trimIndent()
+
+                    try {
+                        // 相談用モデル（chatModel）を使用
+                        val response = chatModel.generateContent(prompt)
+                        chatLog = response.text ?: "返答なし"
+                    } catch (e: Exception) {
+                        chatLog = "エラー: ${e.message}"
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary) // 色を変えて目立たせる
+        ) {
+            Text("今日の振り返り（コーチング）")
+        }
+
         // 入力エリア
         OutlinedTextField(
             value = inputText,
