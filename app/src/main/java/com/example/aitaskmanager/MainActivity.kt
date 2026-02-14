@@ -52,7 +52,7 @@ fun AppScreen() {
     // --- Geminiの設定 ---
     val generativeModel = GenerativeModel(
         modelName = "gemini-3-flash-preview", // ★動くモデル名にしてください
-        apiKey = "AIzaSyCIxcCaa4HqSzKFgQYPU0LlX3SvJwwlF2E", // ★ここにAPIキーを入れる！
+        apiKey = BuildConfig.GEMINI_API_KEY,
         generationConfig = generationConfig { responseMimeType = "application/json" }
     )
 
