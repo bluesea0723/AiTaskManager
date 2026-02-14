@@ -1,7 +1,6 @@
 package com.example.aitaskmanager // ★自分のパッケージ名に合わせてください
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -22,6 +21,9 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.api.services.calendar.CalendarScopes
 import kotlinx.coroutines.launch
+
+// ★ Step 1 で設定した BuildConfig を使うため、APIキーは直接書きません
+// もし BuildConfig がまだエラーなら、一時的に直接 "AIza..." を書いてもOKです
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,36 +46,45 @@ fun AppScreen() {
 
     // --- 状態管理 ---
     var inputText by remember { mutableStateOf("") }
-    var responseJson by remember { mutableStateOf("") } // AIの生JSON
-    var parsedSchedules by remember { mutableStateOf<List<AiSchedule>>(emptyList()) } // 解析後のリスト
-    var signedInAccount by remember { mutableStateOf<GoogleSignInAccount?>(null) } // ログイン中のユーザー
-    var statusMessage by remember { mutableStateOf("まずはGoogleでログインしてください") }
+    var chatLog by remember { mutableStateOf("ここに会話が表示されます") }
+    var signedInAccount by remember { mutableStateOf<GoogleSignInAccount?>(null) }
 
-    // --- Geminiの設定 ---
-    val generativeModel = GenerativeModel(
-        modelName = "gemini-3-flash-preview", // ★動くモデル名にしてください
-        apiKey = BuildConfig.GEMINI_API_KEY,
+    // APIキー（local.properties設定済み前提。だめなら直接書く）
+    val apiKey = BuildConfig.GEMINI_API_KEY
+
+    // --- AIモデルを2つ用意 ---
+
+    // 1. 登録用モデル（JSONモード）
+    val registerModel = GenerativeModel(
+        modelName = "gemini-3-flash-preview",
+        apiKey = apiKey,
         generationConfig = generationConfig { responseMimeType = "application/json" }
     )
 
-    // --- Googleログインの準備 ---
+    // 2. 相談・確認用モデル（通常モード）★新登場！
+    val chatModel = GenerativeModel(
+        modelName = "gemini-3-flash-preview",
+        apiKey = apiKey
+        // JSON設定をしない＝普通の日本語を返せる
+    )
+
+    // --- Googleログイン設定 ---
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
-            val account = task.getResult(ApiException::class.java)
-            signedInAccount = account
-            statusMessage = "ログインしました: ${account.displayName}"
+            signedInAccount = task.getResult(ApiException::class.java)
+            chatLog = "ログインしました！「今日の予定を教えて」と聞いてみてください。"
         } catch (e: ApiException) {
-            statusMessage = "ログイン失敗: ${e.statusCode}"
+            chatLog = "ログイン失敗: ${e.statusCode}"
         }
     }
 
-    // --- UIのレイアウト ---
+    // --- 画面レイアウト ---
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
 
-        // 1. ログインボタン（未ログイン時のみ表示）
+        // ログインボタン
         if (signedInAccount == null) {
             Button(
                 onClick = {
@@ -84,107 +95,109 @@ fun AppScreen() {
                     val client = GoogleSignIn.getClient(context, gso)
                     googleSignInLauncher.launch(client.signInIntent)
                 },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-            ) {
-                Text("Googleカレンダーと連携（ログイン）")
-            }
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Googleカレンダーと連携") }
         } else {
-            Text("ログイン中: ${signedInAccount?.email}", style = MaterialTheme.typography.bodySmall)
+            Text("ログイン中: ${signedInAccount?.displayName}", style = MaterialTheme.typography.bodySmall)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 2. 入力エリア
+        // 入力エリア
         OutlinedTextField(
             value = inputText,
             onValueChange = { inputText = it },
-            label = { Text("例：明日10時から会議") },
+            label = { Text("例: 今日の予定は？ / 明日10時に会議") },
             modifier = Modifier.fillMaxWidth()
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // 3. AI送信ボタン
-        Button(
-            onClick = {
-                scope.launch {
-                    statusMessage = "AIが思考中..."
-                    try {
-                        val prompt = """
-                            ユーザーの入力から予定を抽出しJSONで出力。
-                            日付未指定は今日(2026-02-14)基準。
-                            フォーマット: [{"title": "...", "start": "YYYY-MM-DDTHH:mm:00", "end": "...", "description": "..."}]
-                            入力: $inputText
-                        """.trimIndent()
-
-                        val response = generativeModel.generateContent(prompt)
-                        responseJson = response.text ?: ""
-
-                        // JSONを解析してリストにする
-                        parsedSchedules = CalendarHelper().parseJson(responseJson)
-
-                        statusMessage = if (parsedSchedules.isNotEmpty()) {
-                            "AI解析完了！登録ボタンを押してください"
-                        } else {
-                            "予定が見つかりませんでした"
-                        }
-                    } catch (e: Exception) {
-                        statusMessage = "AIエラー: ${e.message}"
-                    }
-                }
-            },
+        // ★ボタンを横並びに配置
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            enabled = signedInAccount != null // ログインしないと押せない
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("AIに相談")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 4. カレンダー登録ボタン（AI解析後に表示）
-        if (parsedSchedules.isNotEmpty()) {
+            // 左のボタン：予定を確認（相談）
             Button(
                 onClick = {
                     scope.launch {
-                        statusMessage = "カレンダーに書き込み中..."
-                        val helper = CalendarHelper()
-                        var successCount = 0
-
-                        parsedSchedules.forEach { schedule ->
-                            val isSuccess = helper.addEventToCalendar(context, signedInAccount!!, schedule)
-                            if (isSuccess) successCount++
+                        if (signedInAccount == null) {
+                            chatLog = "先にログインしてください"
+                            return@launch
                         }
+                        chatLog = "カレンダーを確認中..."
 
-                        statusMessage = if (successCount > 0) {
-                            "カレンダーに $successCount 件登録しました！"
-                        } else {
-                            "登録に失敗しました"
+                        // 1. カレンダーからデータを取る（今のCalendarHelperは今日分のみ）
+                        val eventsText = CalendarHelper().fetchEvents(context, signedInAccount!!)
+
+                        // 2. AIに渡して要約させる
+                        val prompt = """
+                            あなたは優秀な秘書です。以下のカレンダー情報を元に、ユーザーの質問に答えてください。
+                            予定がない場合は、励ましの言葉をかけてください。
+                            
+                            【カレンダー情報】
+                            $eventsText
+                            
+                            【ユーザーの質問】
+                            $inputText
+                        """.trimIndent()
+
+                        try {
+                            val response = chatModel.generateContent(prompt)
+                            chatLog = response.text ?: "返答なし"
+                        } catch (e: Exception) {
+                            chatLog = "エラー: ${e.message}"
                         }
-                        // 完了したらリセット
-                        if (successCount > 0) parsedSchedules = emptyList()
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
-            ) {
-                Text("カレンダーに登録 (${parsedSchedules.size}件)")
-            }
+                modifier = Modifier.weight(1f)
+            ) { Text("予定を確認") }
+
+            // 右のボタン：予定を登録（以前の機能）
+            Button(
+                onClick = {
+                    scope.launch {
+                        chatLog = "登録データを生成中..."
+                        try {
+                            val prompt = """
+                                ユーザー入力から予定を抽出しJSON出力。日付未指定は今日基準。
+                                [{"title": "...", "start": "...", "end": "...", "description": "..."}]
+                                入力: $inputText
+                            """.trimIndent()
+
+                            val response = registerModel.generateContent(prompt) // JSONモデルを使用
+                            val json = response.text ?: ""
+
+                            // JSON解析と登録
+                            val schedules = CalendarHelper().parseJson(json)
+                            if (schedules.isNotEmpty()) {
+                                var count = 0
+                                schedules.forEach {
+                                    if (CalendarHelper().addEventToCalendar(context, signedInAccount!!, it)) count++
+                                }
+                                chatLog = "$count 件の予定を登録しました！\n確認のため「予定を確認」ボタンを押してみてください。"
+                            } else {
+                                chatLog = "予定情報を抽出できませんでした。"
+                            }
+                        } catch (e: Exception) {
+                            chatLog = "エラー: ${e.message}"
+                        }
+                    }
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+            ) { Text("予定を登録") }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ステータス表示
-        Text(text = statusMessage, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
-
+        // 結果表示
+        Text("AIからの返答:", style = MaterialTheme.typography.titleMedium)
         Spacer(modifier = Modifier.height(8.dp))
-
-        // デバッグ用（AIの生JSON表示）
-        Text("Raw JSON:", style = MaterialTheme.typography.labelSmall)
         Text(
-            text = responseJson,
-            modifier = Modifier.fillMaxSize().verticalScroll(scrollState),
-            style = MaterialTheme.typography.bodySmall
+            text = chatLog,
+            modifier = Modifier.fillMaxSize().verticalScroll(scrollState)
         )
     }
 }
