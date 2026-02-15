@@ -142,4 +142,64 @@ class CalendarHelper {
         dateFormat.timeZone = TimeZone.getTimeZone("Asia/Tokyo")
         return dateFormat.format(java.util.Date())
     }
+
+    // ★追加: 指定した年月の予定を「リスト」で返す関数
+    suspend fun fetchMonthlyEvents(context: Context, account: GoogleSignInAccount, year: Int, month: Int): List<ScheduleData> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val credential = GoogleAccountCredential.usingOAuth2(context, listOf(CalendarScopes.CALENDAR))
+                credential.selectedAccount = account.account
+
+                val service = Calendar.Builder(
+                    NetHttpTransport(), GsonFactory.getDefaultInstance(), credential
+                ).setApplicationName("AiTaskManager").build()
+
+                // 月の初め (1日 00:00)
+                val jstZone = java.util.TimeZone.getTimeZone("Asia/Tokyo")
+                val calendar = java.util.Calendar.getInstance(jstZone).apply {
+                    set(year, month - 1, 1, 0, 0, 0)
+                    set(java.util.Calendar.MILLISECOND, 0)
+                }
+                val startDateTime = DateTime(calendar.time)
+
+                // 月の終わり (翌月の1日 00:00)
+                calendar.add(java.util.Calendar.MONTH, 1)
+                val endDateTime = DateTime(calendar.time)
+
+                val events = service.events().list("primary")
+                    .setTimeMin(startDateTime)
+                    .setTimeMax(endDateTime)
+                    .setOrderBy("startTime")
+                    .setSingleEvents(true)
+                    .execute()
+
+                val items = events.items ?: emptyList()
+                val resultList = mutableListOf<ScheduleData>()
+
+                // 表示用にデータを変換
+                val format = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.JAPAN)
+
+                for (event in items) {
+                    val start = event.start.dateTime ?: event.start.date
+                    val end = event.end.dateTime ?: event.end.date
+                    // DateTime型から文字列に変換してScheduleDataに詰める
+                    val startStr = if(event.start.dateTime != null) format.format(java.util.Date(start.value)) else start.toString()
+                    val endStr = if(event.end.dateTime != null) format.format(java.util.Date(end.value)) else end.toString()
+
+                    resultList.add(
+                        ScheduleData(
+                            title = event.summary ?: "タイトルなし",
+                            start = startStr,
+                            end = endStr,
+                            description = event.description ?: ""
+                        )
+                    )
+                }
+                resultList
+            } catch (e: Exception) {
+                e.printStackTrace()
+                emptyList()
+            }
+        }
+    }
 }
