@@ -2,17 +2,21 @@ package com.example.aitaskmanager.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -29,14 +33,20 @@ fun MonthlyScreen(account: GoogleSignInAccount?) {
     val context = LocalContext.current
     val calendarHelper = remember { CalendarHelper() }
 
-    val calendar = Calendar.getInstance()
-    val currentYear = calendar.get(Calendar.YEAR)
-    val currentMonth = calendar.get(Calendar.MONTH) + 1
+    // ★選択中の月をStateで管理
+    var selectedMonth by remember { mutableStateOf(Calendar.getInstance()) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+
+    val currentYear = selectedMonth.get(Calendar.YEAR)
+    val currentMonth = selectedMonth.get(Calendar.MONTH) + 1
 
     var events by remember { mutableStateOf<List<ScheduleData>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
 
-    LaunchedEffect(account) {
+    // ★スワイプ検知用
+    var offsetX by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(account, selectedMonth, refreshKey) {
         if (account != null) {
             isLoading = true
             events = calendarHelper.fetchMonthlyEvents(context, account, currentYear, currentMonth)
@@ -44,12 +54,57 @@ fun MonthlyScreen(account: GoogleSignInAccount?) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
-        Text(
-            text = "${currentYear}年 ${currentMonth}月",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
+    // 月移動関数
+    fun moveMonth(amount: Int) {
+        val newCal = selectedMonth.clone() as Calendar
+        newCal.add(Calendar.MONTH, amount)
+        selectedMonth = newCal
+        refreshKey++
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(8.dp)
+            // ★スワイプ検知エリア
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (offsetX > 100) {
+                            moveMonth(-1) // 右スワイプ → 先月
+                        } else if (offsetX < -100) {
+                            moveMonth(1)  // 左スワイプ → 来月
+                        }
+                        offsetX = 0f
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        offsetX += dragAmount
+                    }
+                )
+            }
+    ) {
+        // --- ヘッダー (年月と移動ボタン) ---
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            IconButton(onClick = { moveMonth(-1) }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "先月")
+            }
+
+            Text(
+                text = "${currentYear}年 ${currentMonth}月",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+
+            IconButton(onClick = { moveMonth(1) }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "来月")
+            }
+        }
 
         if (account == null) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("ログインしてください") }
@@ -72,9 +127,7 @@ fun CalendarGrid(year: Int, month: Int, events: List<ScheduleData>) {
 
     // 空白セル + 日付セル のリストを作る
     val cells = mutableListOf<String>()
-    // 1日の曜日まで空白を入れる (Calendar.SUNDAY=1 なので -1)
     repeat(firstDayOfWeek - 1) { cells.add("") }
-    // 1日〜月末まで
     for (d in 1..daysInMonth) { cells.add(d.toString()) }
 
     // 曜日ヘッダー
@@ -106,8 +159,6 @@ fun CalendarGrid(year: Int, month: Int, events: List<ScheduleData>) {
                     val dayInt = dayStr.toInt()
                     // この日の予定をフィルタリング
                     val dayEvents = events.filter {
-                        // start文字列に "yyyy-MM-dd" が含まれているか簡易チェック
-                        // (もっと厳密にするなら日付型で比較)
                         val dateKey = "%04d-%02d-%02d".format(year, month, dayInt)
                         it.start.contains(dateKey)
                     }
