@@ -26,7 +26,10 @@ fun MainScreen() {
     val context = LocalContext.current
     val navController = rememberNavController()
 
-    var signedInAccount by remember { mutableStateOf<GoogleSignInAccount?>(null) }
+    // ★ここを変更！ アプリ起動時に「前回のログイン情報」を取得して初期値にする
+    var signedInAccount by remember {
+        mutableStateOf(GoogleSignIn.getLastSignedInAccount(context))
+    }
 
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
