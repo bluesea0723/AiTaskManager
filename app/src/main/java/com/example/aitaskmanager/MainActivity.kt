@@ -1,18 +1,33 @@
-package com.example.aitaskmanager // ★自分のパッケージ名に合わせてください
+package com.example.aitaskmanager // ★あなたのパッケージ名に合わせてください
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.generationConfig
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -20,17 +35,23 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.api.services.calendar.CalendarScopes
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-
-// ★ Step 1 で設定した BuildConfig を使うため、APIキーは直接書きません
-// もし BuildConfig がまだエラーなら、一時的に直接 "AIza..." を書いてもOKです
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // システムバーの領域もアプリで使えるようにする（Edge-to-Edge）
+        enableEdgeToEdge()
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
                     AppScreen()
                 }
             }
@@ -38,214 +59,257 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// --- データクラス ---
+data class ChatMessage(
+    val id: String = UUID.randomUUID().toString(),
+    val text: String,
+    val isUser: Boolean,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+// --- UIコンポーネント ---
 @Composable
 fun AppScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val scrollState = rememberScrollState()
 
-    // --- 状態管理 ---
+    val messages = remember { mutableStateListOf<ChatMessage>() }
+    val listState = rememberLazyListState()
+
     var inputText by remember { mutableStateOf("") }
-    var chatLog by remember { mutableStateOf("ここに会話が表示されます") }
     var signedInAccount by remember { mutableStateOf<GoogleSignInAccount?>(null) }
-
-    // APIキー（local.properties設定済み前提。だめなら直接書く）
     val apiKey = BuildConfig.GEMINI_API_KEY
 
-    // --- AIモデルを2つ用意 ---
+    val registerModel = remember {
+        GenerativeModel(
+            modelName = "gemini-1.5-flash",
+            apiKey = apiKey,
+            generationConfig = generationConfig { responseMimeType = "application/json" }
+        )
+    }
+    val chatModel = remember {
+        GenerativeModel(
+            modelName = "gemini-1.5-flash",
+            apiKey = apiKey
+        )
+    }
 
-    // 1. 登録用モデル（JSONモード）
-    val registerModel = GenerativeModel(
-        modelName = "gemini-3-flash-preview",
-        apiKey = apiKey,
-        generationConfig = generationConfig { responseMimeType = "application/json" }
-    )
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
 
-    // 2. 相談・確認用モデル（通常モード）★新登場！
-    val chatModel = GenerativeModel(
-        modelName = "gemini-3-flash-preview",
-        apiKey = apiKey
-        // JSON設定をしない＝普通の日本語を返せる
-    )
-
-    // --- Googleログイン設定 ---
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
             signedInAccount = task.getResult(ApiException::class.java)
-            chatLog = "ログインしました！「今日の予定を教えて」と聞いてみてください。"
+            messages.add(ChatMessage(text = "ログインしました！", isUser = false))
         } catch (e: ApiException) {
-            chatLog = "ログイン失敗: ${e.statusCode}"
+            messages.add(ChatMessage(text = "ログイン失敗: ${e.statusCode}", isUser = false))
         }
     }
 
-    // --- 画面レイアウト ---
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-
-        // ログインボタン
-        if (signedInAccount == null) {
-            Button(
-                onClick = {
-                    val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                        .requestEmail()
-                        .requestScopes(com.google.android.gms.common.api.Scope(CalendarScopes.CALENDAR))
-                        .build()
-                    val client = GoogleSignIn.getClient(context, gso)
-                    googleSignInLauncher.launch(client.signInIntent)
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Googleカレンダーと連携") }
-        } else {
-            Text("ログイン中: ${signedInAccount?.displayName}", style = MaterialTheme.typography.bodySmall)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.statusBars)
+    ) {
+        // --- 1. チャットエリア ---
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
+        ) {
+            items(messages) { message ->
+                ChatBubble(message = message)
+            }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        // --- 2. 入力エリア ---
+        Surface(
+            tonalElevation = 3.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                // ★★★ ここが修正ポイント ★★★
+                // .union を使うことで、「キーボードが出ている時はキーボードの高さ」
+                // 「出ていない時はナビゲーションバーの高さ」に自動で切り替わります。
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+        ) {
+            Column(modifier = Modifier.padding(10.dp)) {
 
-        //振り返りコーチ
-        Button(
-            onClick = {
-                scope.launch {
-                    if (signedInAccount == null) {
-                        chatLog = "先にログインしてください"
-                        return@launch
+                if (signedInAccount == null) {
+                    Button(
+                        onClick = {
+                            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                                .requestEmail()
+                                .requestScopes(com.google.android.gms.common.api.Scope(CalendarScopes.CALENDAR))
+                                .build()
+                            val client = GoogleSignIn.getClient(context, gso)
+                            googleSignInLauncher.launch(client.signInIntent)
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    ) { Text("連携して開始") }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        placeholder = { Text("メッセージ...") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp),
+                        maxLines = 3,
+                        shape = RoundedCornerShape(24.dp)
+                    )
+
+                    IconButton(
+                        onClick = {
+                            sendMessage(inputText, false, messages, scope, signedInAccount, chatModel, registerModel, context)
+                            inputText = ""
+                        },
+                        enabled = inputText.isNotBlank(),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape)
+                    ) {
+                        Icon(Icons.Default.Send, contentDescription = "相談", tint = Color.White)
                     }
-                    chatLog = "今日の活動を分析中..."
 
-                    // 1. カレンダーから今日の予定を取得
-                    val eventsText = CalendarHelper().fetchEvents(context, signedInAccount!!)
+                    Spacer(modifier = Modifier.width(4.dp))
 
-                    // 2. AIに「コーチ」として振る舞ってもらうプロンプト
-                    val prompt = """
-                        あなたはユーザーの親身な専属コーチです。
-                        以下の「今日のスケジュール」と、ユーザーが入力した「一言感想」を元に、
-                        今日一日の振り返りフィードバックを作成してください。
-
-                        【ルール】
-                        ・まずはユーザーの頑張りを具体的に褒めてください。
-                        ・スケジュールが過密だった場合は、休息を促してください。
-                        ・予定が少なかった場合は、リラックスできたことを肯定してください。
-                        ・最後に、明日に向けたポジティブな一言アドバイスをください。
-                        ・口調は優しく、励ますようにしてください。
-
-                        【今日のスケジュール】
-                        $eventsText
-
-                        【ユーザーの一言感想】
-                        $inputText
-                    """.trimIndent()
-
-                    try {
-                        // 相談用モデル（chatModel）を使用
-                        val response = chatModel.generateContent(prompt)
-                        chatLog = response.text ?: "返答なし"
-                    } catch (e: Exception) {
-                        chatLog = "エラー: ${e.message}"
+                    IconButton(
+                        onClick = {
+                            sendMessage(inputText, true, messages, scope, signedInAccount, chatModel, registerModel, context)
+                            inputText = ""
+                        },
+                        enabled = inputText.isNotBlank(),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(MaterialTheme.colorScheme.secondary, CircleShape)
+                    ) {
+                        Icon(Icons.Default.AddCircle, contentDescription = "登録", tint = Color.White)
                     }
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary) // 色を変えて目立たせる
+            }
+        }
+    }
+}
+
+// 吹き出しのデザイン
+@Composable
+fun ChatBubble(message: ChatMessage) {
+    val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val isUser = message.isUser
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Surface(
+            color = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+            shape = if (isUser) RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp) else RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp),
+            modifier = Modifier.widthIn(max = 320.dp)
         ) {
-            Text("今日の振り返り（コーチング）")
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = dateFormat.format(message.timestamp),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.End),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
+// 送信ロジック
+fun sendMessage(
+    text: String,
+    isRegister: Boolean,
+    messages: androidx.compose.runtime.snapshots.SnapshotStateList<ChatMessage>,
+    scope: CoroutineScope,
+    account: GoogleSignInAccount?,
+    chatModel: GenerativeModel,
+    registerModel: GenerativeModel,
+    context: Context
+) {
+    if (text.isBlank()) return
+    messages.add(ChatMessage(text = text, isUser = true))
+
+    scope.launch {
+        if (account == null) {
+            messages.add(ChatMessage(text = "先に「連携」ボタンを押してログインしてください。", isUser = false))
+            return@launch
         }
 
-        // 入力エリア
-        OutlinedTextField(
-            value = inputText,
-            onValueChange = { inputText = it },
-            label = { Text("例: 今日の予定は？ / 明日10時に会議") },
-            modifier = Modifier.fillMaxWidth()
-        )
+        // 思考中メッセージを表示
+        val loadingMsg = ChatMessage(text = "...", isUser = false)
+        messages.add(loadingMsg)
 
-        Spacer(modifier = Modifier.height(8.dp))
+        try {
+            val responseText = if (isRegister) {
+                // --- 登録モード ---
+                val prompt = """
+                    ユーザー入力から予定を抽出しJSON配列で出力してください。
+                    日付が指定されていない場合は今日(${CalendarHelper().getTodayDate()})を基準にしてください。
+                    出力フォーマット: [{"title": "...", "start": "yyyy-MM-ddTHH:mm:ss", "end": "yyyy-MM-ddTHH:mm:ss", "description": "..."}]
+                    入力: $text
+                """.trimIndent()
 
-        // ★ボタンを横並びに配置
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // 左のボタン：予定を確認（相談）
-            Button(
-                onClick = {
-                    scope.launch {
-                        if (signedInAccount == null) {
-                            chatLog = "先にログインしてください"
-                            return@launch
-                        }
-                        chatLog = "カレンダーを確認中..."
+                val res = registerModel.generateContent(prompt)
+                // JSONのコードブロック記号 ```json ... ``` がある場合に除去する処理
+                val json = res.text?.replace("```json", "")?.replace("```", "")?.trim() ?: ""
 
-                        // 1. カレンダーからデータを取る（今のCalendarHelperは今日分のみ）
-                        val eventsText = CalendarHelper().fetchEvents(context, signedInAccount!!)
-
-                        // 2. AIに渡して要約させる
-                        val prompt = """
-                            あなたは優秀な秘書です。以下のカレンダー情報を元に、ユーザーの質問に答えてください。
-                            予定がない場合は、励ましの言葉をかけてください。
-                            
-                            【カレンダー情報】
-                            $eventsText
-                            
-                            【ユーザーの質問】
-                            $inputText
-                        """.trimIndent()
-
-                        try {
-                            val response = chatModel.generateContent(prompt)
-                            chatLog = response.text ?: "返答なし"
-                        } catch (e: Exception) {
-                            chatLog = "エラー: ${e.message}"
-                        }
+                val schedules = CalendarHelper().parseJson(json)
+                if (schedules.isNotEmpty()) {
+                    var count = 0
+                    schedules.forEach {
+                        if (CalendarHelper().addEventToCalendar(context, account, it)) count++
                     }
-                },
-                modifier = Modifier.weight(1f)
-            ) { Text("予定を確認") }
+                    if (count > 0) "$count 件の予定をカレンダーに登録しました！" else "登録に失敗しました。"
+                } else {
+                    "予定情報をうまく読み取れませんでした。\n「明日10時に会議」のように言ってみてください。"
+                }
+            } else {
+                // --- 相談モード ---
+                val eventsText = CalendarHelper().fetchEvents(context, account)
+                val prompt = """
+                    あなたは親切な秘書です。
+                    【カレンダー情報】
+                    $eventsText
+                    
+                    【ユーザーの質問】
+                    $text
+                    
+                    ユーザーの質問に対し、カレンダー情報を踏まえて答えてください。
+                """.trimIndent()
+                val res = chatModel.generateContent(prompt)
+                res.text ?: "すみません、うまく答えられませんでした。"
+            }
 
-            // 右のボタン：予定を登録（以前の機能）
-            Button(
-                onClick = {
-                    scope.launch {
-                        chatLog = "登録データを生成中..."
-                        try {
-                            val prompt = """
-                                ユーザー入力から予定を抽出しJSON出力。日付未指定は今日基準。
-                                [{"title": "...", "start": "...", "end": "...", "description": "..."}]
-                                入力: $inputText
-                            """.trimIndent()
-
-                            val response = registerModel.generateContent(prompt) // JSONモデルを使用
-                            val json = response.text ?: ""
-
-                            // JSON解析と登録
-                            val schedules = CalendarHelper().parseJson(json)
-                            if (schedules.isNotEmpty()) {
-                                var count = 0
-                                schedules.forEach {
-                                    if (CalendarHelper().addEventToCalendar(context, signedInAccount!!, it)) count++
-                                }
-                                chatLog = "$count 件の予定を登録しました！\n確認のため「予定を確認」ボタンを押してみてください。"
-                            } else {
-                                chatLog = "予定情報を抽出できませんでした。"
-                            }
-                        } catch (e: Exception) {
-                            chatLog = "エラー: ${e.message}"
-                        }
-                    }
-                },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-            ) { Text("予定を登録") }
+            // 思考中を消して返答を表示
+            messages.remove(loadingMsg)
+            messages.add(ChatMessage(text = responseText, isUser = false))
+        } catch (e: Exception) {
+            messages.remove(loadingMsg)
+            e.printStackTrace()
+            messages.add(ChatMessage(text = "エラーが発生しました: ${e.localizedMessage}", isUser = false))
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 結果表示
-        Text("AIからの返答:", style = MaterialTheme.typography.titleMedium)
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = chatLog,
-            modifier = Modifier.fillMaxSize().verticalScroll(scrollState)
-        )
     }
 }

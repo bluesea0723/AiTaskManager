@@ -97,4 +97,9 @@ dependencies {
 
     // JSON解析用（AIのデータをパースするのに使います）
     implementation("com.google.code.gson:gson:2.10.1")
+
+    implementation("com.google.api-client:google-api-client-android:2.2.0")
+    implementation("com.google.apis:google-api-services-calendar:v3-rev20220715-2.0.0")
+    implementation("com.google.http-client:google-http-client-gson:1.43.3")
+    implementation("com.google.api-client:google-api-client:2.2.0")
 }
