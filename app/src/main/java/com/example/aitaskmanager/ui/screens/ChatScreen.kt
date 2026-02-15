@@ -16,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.aitaskmanager.data.ChatMessage
 import com.example.aitaskmanager.logic.CalendarHelper
@@ -23,45 +25,48 @@ import com.example.aitaskmanager.logic.GeminiHelper
 import com.example.aitaskmanager.ui.components.ChatBubble
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.launch
+import kotlin.math.max
 
 @Composable
 fun ChatScreen(
-    account: GoogleSignInAccount?, // 親(MainScreen)から受け取る
-    onLoginClick: () -> Unit       // 親のログイン処理を呼び出すための関数
+    account: GoogleSignInAccount?,
+    onLoginClick: () -> Unit,
+    bottomPadding: Dp // ★追加: MainScreenからメニューバーの高さを貰う
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // データの管理
     val messages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
-
-    // 入力状態
     var inputText by remember { mutableStateOf("") }
-
-    // ヘルパーの準備
     val geminiHelper = remember { GeminiHelper() }
     val calendarHelper = remember { CalendarHelper() }
 
-    // 自動スクロール
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
 
-    // ログイン成功時にメッセージを出す（accountが変わった時だけ反応）
     LaunchedEffect(account) {
         if (account != null) {
             messages.add(ChatMessage(text = "ログインしました！準備OKです。", isUser = false))
         }
     }
 
+    // ★隙間を消す計算ロジック
+    val density = LocalDensity.current
+    val imeBottom = WindowInsets.ime.getBottom(density) // キーボードの高さ(px)
+    val navBarPx = with(density) { bottomPadding.toPx() } // メニューバーの高さ(px)
+
+    // キーボードが出ている時は「キーボードの高さ」、出ていない時は「メニューバーの高さ」を使う
+    val actualBottomPadding = with(density) { max(imeBottom.toFloat(), navBarPx).toDp() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            // MainScreen側でScaffoldを使っているため、ここではstatusBarsのみ考慮すればOK
-            // (ボトムバーのパディングはMainScreenから渡されるが、ここでは簡易的に処理)
+            .background(MaterialTheme.colorScheme.background)
+            // statusBarsのみ適用(top)
             .windowInsetsPadding(WindowInsets.statusBars)
     ) {
         // --- チャットログ ---
@@ -70,7 +75,7 @@ fun ChatScreen(
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
+            contentPadding = PaddingValues(top = 16.dp, bottom = 0.dp)
         ) {
             items(messages) { message ->
                 ChatBubble(message = message)
@@ -82,14 +87,15 @@ fun ChatScreen(
             tonalElevation = 3.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                // ★修正: windowInsetsPadding(ime) をやめて、計算した余白(padding)を適用
+                .padding(bottom = actualBottomPadding)
         ) {
-            Column(modifier = Modifier.padding(10.dp)) {
+            // 前回の修正(top=0.dp)も含めて適用
+            Column(modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 0.dp, bottom = 6.dp)) {
 
-                // 未ログイン時のみボタン表示（accountがnullかどうかで判定）
                 if (account == null) {
                     Button(
-                        onClick = onLoginClick, // 親から貰った関数を実行
+                        onClick = onLoginClick,
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                     ) { Text("Googleカレンダーと連携して開始") }
                 }
@@ -107,7 +113,6 @@ fun ChatScreen(
                         shape = RoundedCornerShape(24.dp)
                     )
 
-                    // 相談ボタン
                     IconButton(
                         onClick = {
                             if (inputText.isBlank()) return@IconButton
@@ -138,7 +143,6 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // 登録ボタン
                     IconButton(
                         onClick = {
                             if (inputText.isBlank()) return@IconButton

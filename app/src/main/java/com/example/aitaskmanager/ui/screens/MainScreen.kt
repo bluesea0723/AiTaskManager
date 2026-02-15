@@ -2,6 +2,8 @@ package com.example.aitaskmanager.ui.screens
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -26,7 +28,6 @@ fun MainScreen() {
     val context = LocalContext.current
     val navController = rememberNavController()
 
-    // ★ここを変更！ アプリ起動時に「前回のログイン情報」を取得して初期値にする
     var signedInAccount by remember {
         mutableStateOf(GoogleSignIn.getLastSignedInAccount(context))
     }
@@ -54,21 +55,18 @@ fun MainScreen() {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                // タブ1: チャット
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Chat, contentDescription = "Chat") },
                     label = { Text("チャット") },
                     selected = navController.currentDestination?.route == "chat",
                     onClick = { navController.navigate("chat") }
                 )
-                // タブ2: 今日の予定 (時系列)
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Today, contentDescription = "Today") },
                     label = { Text("今日") },
                     selected = navController.currentDestination?.route == "daily",
                     onClick = { navController.navigate("daily") }
                 )
-                // タブ3: 今月の予定 (カレンダー表)
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.DateRange, contentDescription = "Month") },
                     label = { Text("今月") },
@@ -78,15 +76,34 @@ fun MainScreen() {
             }
         }
     ) { innerPadding ->
-        Box(modifier = Modifier.padding(innerPadding)) {
-            NavHost(navController = navController, startDestination = "chat") {
-                composable("chat") {
-                    ChatScreen(account = signedInAccount, onLoginClick = onLoginClick)
+        // ★ここを修正！ Boxで囲まず、各画面で余白を調整する
+        NavHost(
+            navController = navController,
+            startDestination = "chat",
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None }
+        ) {
+            composable("chat") {
+                // チャット画面: 上の余白は適用するが、下の余白は「値だけ」渡す
+                Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
+                    ChatScreen(
+                        account = signedInAccount,
+                        onLoginClick = onLoginClick,
+                        bottomPadding = innerPadding.calculateBottomPadding() // 下の余白を渡す
+                    )
                 }
-                composable("daily") {
+            }
+            composable("daily") {
+                // その他の画面: 上下左右の余白を普通に適用
+                Box(modifier = Modifier.padding(innerPadding)) {
                     DailyScreen(account = signedInAccount)
                 }
-                composable("monthly") {
+            }
+            composable("monthly") {
+                // その他の画面: 上下左右の余白を普通に適用
+                Box(modifier = Modifier.padding(innerPadding)) {
                     MonthlyScreen(account = signedInAccount)
                 }
             }

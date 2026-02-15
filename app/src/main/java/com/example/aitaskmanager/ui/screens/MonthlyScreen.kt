@@ -65,6 +65,7 @@ fun MonthlyScreen(account: GoogleSignInAccount?) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .padding(8.dp)
             // ★スワイプ検知エリア
             .pointerInput(Unit) {

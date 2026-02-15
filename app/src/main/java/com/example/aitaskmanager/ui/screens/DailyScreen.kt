@@ -1,5 +1,6 @@
 package com.example.aitaskmanager.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -81,6 +82,7 @@ fun DailyScreen(account: GoogleSignInAccount?) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             // ★変更点2: スワイプ検知エリアを画面全体に設定
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
