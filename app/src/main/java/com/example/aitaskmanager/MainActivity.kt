@@ -82,14 +82,14 @@ fun AppScreen() {
 
     val registerModel = remember {
         GenerativeModel(
-            modelName = "gemini-1.5-flash",
+            modelName = BuildConfig.GEMINI_MODEL_NAME,
             apiKey = apiKey,
             generationConfig = generationConfig { responseMimeType = "application/json" }
         )
     }
     val chatModel = remember {
         GenerativeModel(
-            modelName = "gemini-1.5-flash",
+            modelName = BuildConfig.GEMINI_MODEL_NAME,
             apiKey = apiKey
         )
     }

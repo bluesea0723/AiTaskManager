@@ -13,7 +13,7 @@ if (localPropertiesFile.exists()) {
     localProperties.load(FileInputStream(localPropertiesFile))
 }
 val geminiApiKey = localProperties.getProperty("GEMINI_API_KEY") ?: ""
-// --- ここまで ---
+val geminiModelName = localProperties.getProperty("GEMINI_MODEL_NAME") ?: "\"gemini-3-flash-preview\""
 
 android {
     namespace = "com.example.aitaskmanager"
@@ -30,6 +30,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GEMINI_API_KEY", geminiApiKey)
+        buildConfigField("String", "GEMINI_MODEL_NAME", geminiModelName)
     }
 
     buildFeatures {
