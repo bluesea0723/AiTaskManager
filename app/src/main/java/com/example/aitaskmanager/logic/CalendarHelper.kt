@@ -1,11 +1,10 @@
-package com.example.aitaskmanager // ★あなたのパッケージ名に合わせてください
-
+package com.example.aitaskmanager.logic
 
 import android.content.Context
+import com.example.aitaskmanager.data.ScheduleData
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-// AndroidHttp はここに入っています
-import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.client.util.DateTime
 import com.google.api.services.calendar.Calendar
@@ -16,18 +15,10 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-
-// 予定データの形式
-data class ScheduleData(
-    val title: String,
-    val start: String,
-    val end: String,
-    val description: String
-)
+import java.util.TimeZone
 
 class CalendarHelper {
 
-    // 1. JSON文字列を解析してリストにする関数
     fun parseJson(jsonString: String): List<ScheduleData> {
         return try {
             val gson = Gson()
@@ -39,7 +30,6 @@ class CalendarHelper {
         }
     }
 
-    // 2. カレンダーに予定を追加する関数
     suspend fun addEventToCalendar(
         context: Context,
         account: GoogleSignInAccount,
@@ -47,23 +37,17 @@ class CalendarHelper {
     ): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val credential = GoogleAccountCredential.usingOAuth2(
-                    context,
-                    listOf(CalendarScopes.CALENDAR)
-                )
+                val credential = GoogleAccountCredential.usingOAuth2(context, listOf(CalendarScopes.CALENDAR))
                 credential.selectedAccount = account.account
 
                 val service = Calendar.Builder(
-                    NetHttpTransport(),
-                    GsonFactory.getDefaultInstance(),
-                    credential
+                    NetHttpTransport(), GsonFactory.getDefaultInstance(), credential
                 ).setApplicationName("AiTaskManager").build()
 
                 val event = Event().apply {
                     summary = schedule.title
                     description = schedule.description
-
-                    // 日本時間の補正(+09:00)がない場合は追加する
+                    // 日本時間の補正
                     start = EventDateTime().apply {
                         val jstStart = if (schedule.start.contains("+")) schedule.start else schedule.start + "+09:00"
                         dateTime = DateTime(jstStart)
@@ -75,7 +59,6 @@ class CalendarHelper {
                         timeZone = "Asia/Tokyo"
                     }
                 }
-
                 service.events().insert("primary", event).execute()
                 true
             } catch (e: Exception) {
@@ -85,25 +68,19 @@ class CalendarHelper {
         }
     }
 
-    // 3. 今日の予定を取得する関数
+    // ★修正: 今後1週間の予定を日本時間で取得する
     suspend fun fetchEvents(context: Context, account: GoogleSignInAccount): String {
         return withContext(Dispatchers.IO) {
             try {
-                // 読み取り時も権限は "CALENDAR" で統一（エラー回避のため）
-                val credential = GoogleAccountCredential.usingOAuth2(
-                    context,
-                    listOf(CalendarScopes.CALENDAR)
-                )
+                val credential = GoogleAccountCredential.usingOAuth2(context, listOf(CalendarScopes.CALENDAR))
                 credential.selectedAccount = account.account
 
                 val service = Calendar.Builder(
-                    NetHttpTransport(),
-                    GsonFactory.getDefaultInstance(),
-                    credential
+                    NetHttpTransport(), GsonFactory.getDefaultInstance(), credential
                 ).setApplicationName("AiTaskManager").build()
 
-                // 日本時間の今日の00:00〜翌00:00を設定
-                val jstZone = java.util.TimeZone.getTimeZone("Asia/Tokyo")
+                // 期間設定: 今日の00:00 〜 7日後
+                val jstZone = TimeZone.getTimeZone("Asia/Tokyo")
                 val calendar = java.util.Calendar.getInstance(jstZone).apply {
                     set(java.util.Calendar.HOUR_OF_DAY, 0)
                     set(java.util.Calendar.MINUTE, 0)
@@ -112,7 +89,7 @@ class CalendarHelper {
                 }
                 val startDateTime = DateTime(calendar.time)
 
-                calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                calendar.add(java.util.Calendar.DAY_OF_MONTH, 7) // 1週間分取得
                 val endDateTime = DateTime(calendar.time)
 
                 val events = service.events().list("primary")
@@ -124,13 +101,30 @@ class CalendarHelper {
 
                 val items = events.items
                 if (items.isEmpty()) {
-                    "今日の予定はありません。"
+                    "今後1週間の予定はありません。"
                 } else {
-                    val sb = StringBuilder("【今日の予定】\n")
+                    val sb = StringBuilder("【今後1週間の予定】\n")
+                    // ★重要: 表示フォーマットを日本時間(Asia/Tokyo)に強制固定
+                    val format = java.text.SimpleDateFormat("MM/dd(E) HH:mm", java.util.Locale.JAPAN)
+                    format.timeZone = jstZone // これで世界標準時になるのを防ぐ
+
+                    val dayFormat = java.text.SimpleDateFormat("MM/dd(E)", java.util.Locale.JAPAN)
+                    dayFormat.timeZone = jstZone
+
                     for (event in items) {
-                        val start = event.start.dateTime ?: event.start.date
+                        val start = event.start.dateTime
+                        val date = event.start.date
+
+                        val timeStr = if (start != null) {
+                            // 時間指定あり
+                            format.format(java.util.Date(start.value))
+                        } else {
+                            // 終日予定
+                            dayFormat.format(java.util.Date(date.value)) + " [終日]"
+                        }
+
                         val summary = event.summary
-                        sb.append("- $start : $summary\n")
+                        sb.append("- $timeStr : $summary\n")
                     }
                     sb.toString()
                 }
@@ -142,9 +136,10 @@ class CalendarHelper {
         }
     }
 
-    // 4. 今日の日付文字列を取得 (AIへのコンテキスト用)
+    // 今日の日付を取得 (AIコンテキスト用)
     fun getTodayDate(): String {
-        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd (E)", java.util.Locale.JAPAN)
+        dateFormat.timeZone = TimeZone.getTimeZone("Asia/Tokyo")
         return dateFormat.format(java.util.Date())
     }
 }

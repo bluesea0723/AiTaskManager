@@ -1,4 +1,4 @@
-package com.example.aitaskmanager.ui.theme
+package com.example.aitaskmanager.ui.components
 
 import androidx.compose.ui.graphics.Color
 
