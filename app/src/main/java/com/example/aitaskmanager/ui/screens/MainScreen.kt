@@ -5,8 +5,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -25,10 +26,8 @@ fun MainScreen() {
     val context = LocalContext.current
     val navController = rememberNavController()
 
-    // ★ログイン状態をここで一元管理する
     var signedInAccount by remember { mutableStateOf<GoogleSignInAccount?>(null) }
 
-    // ログイン処理
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -40,7 +39,6 @@ fun MainScreen() {
         }
     }
 
-    // ログイン関数（子画面から呼べるようにする）
     val onLoginClick = {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
@@ -50,39 +48,42 @@ fun MainScreen() {
         googleSignInLauncher.launch(client.signInIntent)
     }
 
-    // 画面の骨組み (Scaffold)
     Scaffold(
         bottomBar = {
             NavigationBar {
-                // タブ1: チャット (Home)
+                // タブ1: チャット
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                    icon = { Icon(Icons.Default.Chat, contentDescription = "Chat") },
                     label = { Text("チャット") },
                     selected = navController.currentDestination?.route == "chat",
                     onClick = { navController.navigate("chat") }
                 )
-                // タブ2: カレンダー (Monthly)
+                // タブ2: 今日の予定 (時系列)
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.DateRange, contentDescription = "Calendar") },
-                    label = { Text("今月の予定") },
+                    icon = { Icon(Icons.Default.Today, contentDescription = "Today") },
+                    label = { Text("今日") },
+                    selected = navController.currentDestination?.route == "daily",
+                    onClick = { navController.navigate("daily") }
+                )
+                // タブ3: 今月の予定 (カレンダー表)
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.DateRange, contentDescription = "Month") },
+                    label = { Text("今月") },
                     selected = navController.currentDestination?.route == "monthly",
                     onClick = { navController.navigate("monthly") }
                 )
             }
         }
     ) { innerPadding ->
-        // 画面切り替えエリア
         Box(modifier = Modifier.padding(innerPadding)) {
             NavHost(navController = navController, startDestination = "chat") {
                 composable("chat") {
-                    // チャット画面にアカウントとログイン機能を渡す
-                    ChatScreen(
-                        account = signedInAccount,
-                        onLoginClick = onLoginClick
-                    )
+                    ChatScreen(account = signedInAccount, onLoginClick = onLoginClick)
+                }
+                composable("daily") {
+                    DailyScreen(account = signedInAccount)
                 }
                 composable("monthly") {
-                    // カレンダー画面にアカウントを渡す
                     MonthlyScreen(account = signedInAccount)
                 }
             }
