@@ -22,6 +22,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.api.services.calendar.CalendarScopes
+import androidx.compose.material.icons.filled.Flag // 目標アイコン用
 
 @Composable
 fun MainScreen() {
@@ -61,6 +62,13 @@ fun MainScreen() {
                     selected = navController.currentDestination?.route == "chat",
                     onClick = { navController.navigate("chat") }
                 )
+                // ★追加: 目標タブ
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Flag, contentDescription = "Goal") },
+                    label = { Text("目標") },
+                    selected = navController.currentDestination?.route == "goal",
+                    onClick = { navController.navigate("goal") }
+                )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Today, contentDescription = "Today") },
                     label = { Text("今日") },
@@ -93,6 +101,12 @@ fun MainScreen() {
                         onLoginClick = onLoginClick,
                         bottomPadding = innerPadding.calculateBottomPadding() // 下の余白を渡す
                     )
+                }
+            }
+            // ★追加: 目標画面
+            composable("goal") {
+                Box(modifier = Modifier.padding(innerPadding)) {
+                    GoalScreen(account = signedInAccount)
                 }
             }
             composable("daily") {
