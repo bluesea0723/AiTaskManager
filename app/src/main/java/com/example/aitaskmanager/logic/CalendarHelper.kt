@@ -20,12 +20,7 @@ import java.util.TimeZone
 
 class CalendarHelper {
 
-    // データベースへのアクセス
     private fun getDao(context: Context) = AppDatabase.getDatabase(context).scheduleDao()
-
-    // ==========================================
-    //  新しい機能（DBキャッシュ対応版）
-    // ==========================================
 
     // 1. 日表示用のデータ取得
     suspend fun fetchDailyEvents(context: Context, account: GoogleSignInAccount, year: Int, month: Int, day: Int, forceRefresh: Boolean = false): List<ScheduleData> {
@@ -33,24 +28,32 @@ class CalendarHelper {
             try {
                 // 期間計算 (JST)
                 val (startStr, endStr) = getRangeStrings(year, month, day, 1, java.util.Calendar.DAY_OF_MONTH)
-
-                // ★キャッシュチェック
                 val dao = getDao(context)
+
+                // キャッシュチェック（forceRefreshでない場合）
                 if (!forceRefresh) {
                     val cached = dao.getEventsInRange(startStr, endStr)
-                    if (cached.isNotEmpty()) {
-                        // キャッシュがあればそれを返す（高速！）
-                        return@withContext cached
-                    }
+                    // キャッシュがあり、かつ完了していないものが含まれていれば返す（簡易判定）
+                    // ※厳密にはAPI更新が必要なケースもあるが、高速化のためキャッシュ優先
+                    if (cached.isNotEmpty()) return@withContext cached
                 }
 
-                // APIから取得
-                val events = fetchFromApi(context, account, year, month, day, java.util.Calendar.DAY_OF_MONTH)
+                // APIから最新の予定を取得
+                val eventsFromApi = fetchFromApi(context, account, year, month, day, java.util.Calendar.DAY_OF_MONTH)
 
-                // ★DBに保存
-                dao.insertAll(events)
+                // ★重要: すでにアプリ内で「完了(true)」にしている予定のIDリストを取得し、APIのデータと合体させる
+                // これをやらないと、APIから再取得した瞬間に完了したタスクが復活してしまう
+                val existingEvents = dao.getEventsInRange(startStr, endStr)
+                val completedIds = existingEvents.filter { it.isCompleted }.map { it.id }.toSet()
 
-                events
+                val mergedEvents = eventsFromApi.map { event ->
+                    if (event.id in completedIds) event.copy(isCompleted = true) else event
+                }
+
+                // 完了状態を引き継いだデータをDBに保存
+                dao.insertAll(mergedEvents)
+
+                mergedEvents
             } catch (e: Exception) {
                 e.printStackTrace()
                 emptyList()
@@ -62,11 +65,9 @@ class CalendarHelper {
     suspend fun fetchMonthlyEvents(context: Context, account: GoogleSignInAccount, year: Int, month: Int, forceRefresh: Boolean = false): List<ScheduleData> {
         return withContext(Dispatchers.IO) {
             try {
-                // 期間計算 (JST)
                 val (startStr, endStr) = getRangeStrings(year, month, 1, 1, java.util.Calendar.MONTH)
-
-                // ★キャッシュチェック
                 val dao = getDao(context)
+
                 if (!forceRefresh) {
                     val cached = dao.getEventsInRange(startStr, endStr)
                     if (cached.isNotEmpty()) {
@@ -77,13 +78,55 @@ class CalendarHelper {
                 // APIから取得
                 val events = fetchFromApi(context, account, year, month, 1, java.util.Calendar.MONTH)
 
-                // ★DBに保存
-                dao.insertAll(events)
+                // 月表示でも完了状態を引き継ぐ
+                val existingEvents = dao.getEventsInRange(startStr, endStr)
+                val completedIds = existingEvents.filter { it.isCompleted }.map { it.id }.toSet()
 
-                events
+                val mergedEvents = events.map { event ->
+                    if (event.id in completedIds) event.copy(isCompleted = true) else event
+                }
+
+                dao.insertAll(mergedEvents)
+                mergedEvents
             } catch (e: Exception) {
                 e.printStackTrace()
                 emptyList()
+            }
+        }
+    }
+
+    // ★修正: 完了と未完了のフラグを自由に切り替えられるようにする
+    suspend fun updateEventCompletion(context: Context, schedule: ScheduleData, isCompleted: Boolean): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                // データベース内のデータだけ「isCompleted = 渡された値」にして上書き保存
+                val dao = getDao(context)
+                val updatedSchedule = schedule.copy(isCompleted = isCompleted)
+                dao.insert(updatedSchedule)
+
+                true
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+        }
+    }
+
+    // 既存の削除機能（本当に消したい時用）
+    suspend fun deleteEvent(context: Context, account: GoogleSignInAccount, schedule: ScheduleData): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                try {
+                    val service = getCalendarService(context, account)
+                    service.events().delete("primary", schedule.id).execute()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                getDao(context).delete(schedule)
+                true
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
             }
         }
     }
@@ -112,7 +155,6 @@ class CalendarHelper {
         return convertEventsToScheduleData(events.items ?: emptyList())
     }
 
-    // 期間の文字列(ISO8601)を取得するヘルパー
     private fun getRangeStrings(year: Int, month: Int, day: Int, amount: Int, field: Int): Pair<String, String> {
         val jstZone = TimeZone.getTimeZone("Asia/Tokyo")
         val calendar = java.util.Calendar.getInstance(jstZone).apply {
@@ -129,7 +171,7 @@ class CalendarHelper {
     }
 
     // ==========================================
-    //  AI相談・登録用（変更なし、ただしDB保存を追加）
+    //  AI相談・登録用
     // ==========================================
 
     fun getTodayDate(): String {
@@ -141,18 +183,6 @@ class CalendarHelper {
     suspend fun fetchEvents(context: Context, account: GoogleSignInAccount): String {
         return withContext(Dispatchers.IO) {
             try {
-                // 今後1週間を取得(ここは相談用なので毎回APIでもOKだが、一応DB保存してもよい)
-                // 簡略化のため、既存ロジック通りAPIから取って返す（DB保存は必須ではない）
-                val events = fetchFromApi(context, account,
-                    java.util.Calendar.getInstance().get(java.util.Calendar.YEAR),
-                    java.util.Calendar.getInstance().get(java.util.Calendar.MONTH) + 1,
-                    java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_MONTH),
-                    java.util.Calendar.WEEK_OF_YEAR // ※正確にはWEEKフィールドではないが、便宜上
-                )
-                // ※fetchFromApiのロジック上、WEEK_OF_YEARのaddは正しく動かない可能性があるため
-                //   厳密にはここだけ元のロジックの方が安全ですが、今回は簡略化しています。
-                //   元の相談機能が壊れないよう、ここだけ元の実装(API直接)に戻します↓
-
                 val service = getCalendarService(context, account)
                 val jstZone = TimeZone.getTimeZone("Asia/Tokyo")
                 val calendar = java.util.Calendar.getInstance(jstZone).apply {
@@ -201,7 +231,6 @@ class CalendarHelper {
         }
     }
 
-    // 予定追加
     suspend fun addEventToCalendar(context: Context, account: GoogleSignInAccount, schedule: ScheduleData): Boolean {
         return withContext(Dispatchers.IO) {
             try {
@@ -220,10 +249,8 @@ class CalendarHelper {
                         timeZone = "Asia/Tokyo"
                     }
                 }
-                // APIに追加
                 val createdEvent = service.events().insert("primary", event).execute()
 
-                // ★成功したらDBにも保存して、キャッシュを最新にする
                 if (createdEvent != null) {
                     val newScheduleData = convertEventsToScheduleData(listOf(createdEvent)).first()
                     getDao(context).insert(newScheduleData)
@@ -255,12 +282,12 @@ class CalendarHelper {
 
             list.add(
                 ScheduleData(
-                    // ★IDを取得して保存。なければランダム生成
                     id = event.id ?: java.util.UUID.randomUUID().toString(),
                     title = event.summary ?: "(タイトルなし)",
                     start = startStr,
                     end = endStr,
-                    description = event.description ?: ""
+                    description = event.description ?: "",
+                    isCompleted = false // デフォルトは未完了
                 )
             )
         }
