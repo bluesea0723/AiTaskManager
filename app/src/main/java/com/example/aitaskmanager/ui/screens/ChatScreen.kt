@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.aitaskmanager.data.AppDatabase
 import com.example.aitaskmanager.data.ChatMessage
 import com.example.aitaskmanager.logic.CalendarHelper
 import com.example.aitaskmanager.logic.GeminiHelper
@@ -31,7 +32,7 @@ import kotlin.math.max
 fun ChatScreen(
     account: GoogleSignInAccount?,
     onLoginClick: () -> Unit,
-    bottomPadding: Dp // ★追加: MainScreenからメニューバーの高さを貰う
+    bottomPadding: Dp // MainScreenからメニューバーの高さを貰う
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -39,8 +40,18 @@ fun ChatScreen(
     val messages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
     var inputText by remember { mutableStateOf("") }
+
     val geminiHelper = remember { GeminiHelper() }
     val calendarHelper = remember { CalendarHelper() }
+
+    // ★追加: データベースのDAOを取得
+    val chatDao = remember { AppDatabase.getDatabase(context).chatMessageDao() }
+
+    // ★追加: 画面を開いた時にデータベースから履歴を読み込む
+    LaunchedEffect(Unit) {
+        val savedMessages = chatDao.getAllMessages()
+        messages.addAll(savedMessages)
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -48,13 +59,15 @@ fun ChatScreen(
         }
     }
 
+    /* // 初回ログイン時のメッセージ（DB保存すると履歴に残るので、お好みでコメントアウト解除）
     LaunchedEffect(account) {
-        if (account != null) {
-            messages.add(ChatMessage(text = "ログインしました！準備OKです。", isUser = false))
+        if (account != null && messages.isEmpty()) {
+            // ...
         }
     }
+    */
 
-    // ★隙間を消す計算ロジック
+    // 隙間を消す計算ロジック
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density) // キーボードの高さ(px)
     val navBarPx = with(density) { bottomPadding.toPx() } // メニューバーの高さ(px)
@@ -87,10 +100,10 @@ fun ChatScreen(
             tonalElevation = 3.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                // ★修正: windowInsetsPadding(ime) をやめて、計算した余白(padding)を適用
+                // 計算した余白(padding)を適用
                 .padding(bottom = actualBottomPadding)
         ) {
-            // 前回の修正(top=0.dp)も含めて適用
+            // top=0.dpで隙間をなくす
             Column(modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 0.dp, bottom = 6.dp)) {
 
                 if (account == null) {
@@ -113,26 +126,37 @@ fun ChatScreen(
                         shape = RoundedCornerShape(24.dp)
                     )
 
+                    // --- 相談ボタン ---
                     IconButton(
                         onClick = {
                             if (inputText.isBlank()) return@IconButton
-                            val userMsg = inputText
+                            val userText = inputText
                             inputText = ""
 
-                            messages.add(ChatMessage(text = userMsg, isUser = true))
+                            // ★ユーザーのメッセージを作成してリストとDBに追加
+                            val userMsg = ChatMessage(text = userText, isUser = true)
+                            messages.add(userMsg)
+                            scope.launch { chatDao.insert(userMsg) }
+
                             scope.launch {
                                 if (account == null) {
-                                    messages.add(ChatMessage(text = "先にログインしてね", isUser = false))
+                                    val errorMsg = ChatMessage(text = "先にログインしてね", isUser = false)
+                                    messages.add(errorMsg)
+                                    chatDao.insert(errorMsg)
                                     return@launch
                                 }
                                 val loading = ChatMessage(text = "...", isUser = false)
                                 messages.add(loading)
 
                                 val events = calendarHelper.fetchEvents(context, account)
-                                val response = geminiHelper.consult(userMsg, events)
+                                val responseText = geminiHelper.consult(userText, events)
 
                                 messages.remove(loading)
-                                messages.add(ChatMessage(text = response, isUser = false))
+
+                                // ★AIの返答をリストとDBに追加
+                                val aiMsg = ChatMessage(text = responseText, isUser = false)
+                                messages.add(aiMsg)
+                                chatDao.insert(aiMsg)
                             }
                         },
                         enabled = inputText.isNotBlank(),
@@ -143,35 +167,46 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
+                    // --- 登録ボタン ---
                     IconButton(
                         onClick = {
                             if (inputText.isBlank()) return@IconButton
-                            val userMsg = inputText
+                            val userText = inputText
                             inputText = ""
 
-                            messages.add(ChatMessage(text = userMsg, isUser = true))
+                            // ★ユーザーのメッセージを作成してリストとDBに追加
+                            val userMsg = ChatMessage(text = userText, isUser = true)
+                            messages.add(userMsg)
+                            scope.launch { chatDao.insert(userMsg) }
+
                             scope.launch {
                                 if (account == null) {
-                                    messages.add(ChatMessage(text = "先にログインしてね", isUser = false))
+                                    val errorMsg = ChatMessage(text = "先にログインしてね", isUser = false)
+                                    messages.add(errorMsg)
+                                    chatDao.insert(errorMsg)
                                     return@launch
                                 }
                                 val loading = ChatMessage(text = "...", isUser = false)
                                 messages.add(loading)
 
-                                val json = geminiHelper.generateScheduleJson(userMsg)
+                                val json = geminiHelper.generateScheduleJson(userText)
                                 val schedules = calendarHelper.parseJson(json)
 
-                                if (schedules.isNotEmpty()) {
+                                messages.remove(loading)
+                                val responseText = if (schedules.isNotEmpty()) {
                                     var count = 0
                                     schedules.forEach {
                                         if (calendarHelper.addEventToCalendar(context, account, it)) count++
                                     }
-                                    messages.remove(loading)
-                                    messages.add(ChatMessage(text = "$count 件登録しました！", isUser = false))
+                                    "$count 件登録しました！"
                                 } else {
-                                    messages.remove(loading)
-                                    messages.add(ChatMessage(text = "予定情報を理解できませんでした。", isUser = false))
+                                    "予定情報を理解できませんでした。"
                                 }
+
+                                // ★AIの返答をリストとDBに追加
+                                val aiMsg = ChatMessage(text = responseText, isUser = false)
+                                messages.add(aiMsg)
+                                chatDao.insert(aiMsg)
                             }
                         },
                         enabled = inputText.isNotBlank(),

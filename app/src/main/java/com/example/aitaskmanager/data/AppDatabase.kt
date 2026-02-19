@@ -9,30 +9,44 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-// ▼ DAO: データベースへの命令文
+// ▼ (既存) スケジュール用のDAO
 @Dao
 interface ScheduleDao {
-    // 指定した期間の予定を取得
     @Query("SELECT * FROM schedules WHERE start >= :startStr AND start < :endStr ORDER BY start ASC")
     suspend fun getEventsInRange(startStr: String, endStr: String): List<ScheduleData>
 
-    // 予定を保存 (同じIDなら上書き)
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(schedules: List<ScheduleData>)
 
-    // 1件保存
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(schedule: ScheduleData)
 
-    // 全削除 (デバッグ用やリセット用)
     @Query("DELETE FROM schedules")
     suspend fun deleteAll()
 }
 
-// ▼ Database: データベース本体の設定
-@Database(entities = [ScheduleData::class], version = 1, exportSchema = false)
+// ▼ ★追加: チャットメッセージ用のDAO
+@Dao
+interface ChatMessageDao {
+    // 全メッセージを古い順（時間順）に取得
+    @Query("SELECT * FROM chat_messages ORDER BY timestamp ASC")
+    suspend fun getAllMessages(): List<ChatMessage>
+
+    // メッセージを保存
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(message: ChatMessage)
+
+    // 全削除（履歴クリア機能用）
+    @Query("DELETE FROM chat_messages")
+    suspend fun deleteAll()
+}
+
+// ▼ ★変更: entitiesにChatMessageを追加し、versionを「2」に変更
+@Database(entities = [ScheduleData::class, ChatMessage::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun scheduleDao(): ScheduleDao
+    // ★追加: チャット用のDAOを呼び出せるようにする
+    abstract fun chatMessageDao(): ChatMessageDao
 
     companion object {
         @Volatile
@@ -43,8 +57,11 @@ abstract class AppDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "schedule_database" // データベースファイル名
-                ).build()
+                    "schedule_database"
+                )
+                    // ★追加: データベースの構造が変わった時に、クラッシュせずに作り直す設定
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }
