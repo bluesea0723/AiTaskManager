@@ -23,6 +23,8 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.api.services.calendar.CalendarScopes
 import androidx.compose.material.icons.filled.Flag // 目標アイコン用
+import android.accounts.Account
+import android.content.Context
 
 @Composable
 fun MainScreen() {
