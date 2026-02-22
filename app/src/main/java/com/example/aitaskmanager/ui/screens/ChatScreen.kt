@@ -1,6 +1,5 @@
 package com.example.aitaskmanager.ui.screens
 
-import android.accounts.Account
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,25 +24,24 @@ import com.example.aitaskmanager.data.ChatMessage
 import com.example.aitaskmanager.logic.CalendarHelper
 import com.example.aitaskmanager.logic.GeminiHelper
 import com.example.aitaskmanager.ui.components.ChatBubble
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.launch
 import kotlin.math.max
 
 @Composable
 fun ChatScreen(
-    accounts: List<Account>,
+    accounts: List<GoogleSignInAccount>, // ★変更
     onLoginClick: () -> Unit,
-    bottomPadding: Dp // MainScreenからメニューバーの高さを貰う
+    bottomPadding: Dp
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
     val messages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
     var inputText by remember { mutableStateOf("") }
 
     val geminiHelper = remember { GeminiHelper() }
     val calendarHelper = remember { CalendarHelper() }
-
     val chatDao = remember { AppDatabase.getDatabase(context).chatMessageDao() }
 
     LaunchedEffect(Unit) {
@@ -60,63 +58,34 @@ fun ChatScreen(
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
     val navBarPx = with(density) { bottomPadding.toPx() }
-
     val actualBottomPadding = with(density) { max(imeBottom.toFloat(), navBarPx).toDp() }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .windowInsetsPadding(WindowInsets.statusBars)
-    ) {
-        // --- チャットログ ---
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.statusBars)) {
         LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 16.dp),
+            state = listState, modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
             contentPadding = PaddingValues(top = 16.dp, bottom = 0.dp)
         ) {
-            items(messages) { message ->
-                ChatBubble(message = message)
-            }
+            items(messages) { message -> ChatBubble(message = message) }
         }
 
-        // --- 入力エリア ---
-        Surface(
-            tonalElevation = 3.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = actualBottomPadding)
-        ) {
+        Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth().padding(bottom = actualBottomPadding)) {
             Column(modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 0.dp, bottom = 6.dp)) {
 
-                // アカウント未登録の場合はログインボタンを複数回押して追加可能にする
-                Button(
-                    onClick = onLoginClick,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                ) { Text(if (accounts.isEmpty()) "Googleカレンダーと連携して開始" else "さらにカレンダーアカウントを追加") }
+                // ★追加: アカウント追加ボタンを常に表示
+                Button(onClick = onLoginClick, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Text(if (accounts.isEmpty()) "Googleカレンダーと連携して開始" else "別のアカウントを追加")
+                }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        placeholder = { Text("メッセージ...") },
-                        modifier = Modifier.weight(1f).padding(end = 8.dp),
-                        maxLines = 3,
-                        shape = RoundedCornerShape(24.dp)
+                        value = inputText, onValueChange = { inputText = it }, placeholder = { Text("メッセージ...") },
+                        modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 3, shape = RoundedCornerShape(24.dp)
                     )
 
-                    // --- 相談ボタン ---
                     IconButton(
                         onClick = {
                             if (inputText.isBlank()) return@IconButton
-                            val userText = inputText
-                            inputText = ""
-
+                            val userText = inputText; inputText = ""
                             val userMsg = ChatMessage(text = userText, isUser = true)
                             messages.add(userMsg)
                             scope.launch { chatDao.insert(userMsg) }
@@ -135,27 +104,20 @@ fun ChatScreen(
                                 val responseText = geminiHelper.consult(userText, events)
 
                                 messages.remove(loading)
-
                                 val aiMsg = ChatMessage(text = responseText, isUser = false)
                                 messages.add(aiMsg)
                                 chatDao.insert(aiMsg)
                             }
                         },
-                        enabled = inputText.isNotBlank(),
-                        modifier = Modifier.size(48.dp).background(MaterialTheme.colorScheme.primary, CircleShape)
-                    ) {
-                        Icon(Icons.Default.Send, contentDescription = "相談", tint = Color.White)
-                    }
+                        enabled = inputText.isNotBlank(), modifier = Modifier.size(48.dp).background(MaterialTheme.colorScheme.primary, CircleShape)
+                    ) { Icon(Icons.Default.Send, "相談", tint = Color.White) }
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // --- 登録ボタン ---
                     IconButton(
                         onClick = {
                             if (inputText.isBlank()) return@IconButton
-                            val userText = inputText
-                            inputText = ""
-
+                            val userText = inputText; inputText = ""
                             val userMsg = ChatMessage(text = userText, isUser = true)
                             messages.add(userMsg)
                             scope.launch { chatDao.insert(userMsg) }
@@ -176,9 +138,8 @@ fun ChatScreen(
                                 messages.remove(loading)
                                 val responseText = if (schedules.isNotEmpty()) {
                                     var count = 0
-                                    schedules.forEach {
-                                        if (calendarHelper.addEventToCalendar(context, accounts, it)) count++
-                                    }
+                                    // ★AIでの登録時はとりあえずリストの最初のアカウントに登録
+                                    schedules.forEach { if (calendarHelper.addEventToCalendar(context, accounts.first(), it)) count++ }
                                     "$count 件登録しました！"
                                 } else {
                                     "予定情報を理解できませんでした。"
@@ -189,11 +150,8 @@ fun ChatScreen(
                                 chatDao.insert(aiMsg)
                             }
                         },
-                        enabled = inputText.isNotBlank(),
-                        modifier = Modifier.size(48.dp).background(MaterialTheme.colorScheme.secondary, CircleShape)
-                    ) {
-                        Icon(Icons.Default.AddCircle, contentDescription = "登録", tint = Color.White)
-                    }
+                        enabled = inputText.isNotBlank(), modifier = Modifier.size(48.dp).background(MaterialTheme.colorScheme.secondary, CircleShape)
+                    ) { Icon(Icons.Default.AddCircle, "登録", tint = Color.White) }
                 }
             }
         }

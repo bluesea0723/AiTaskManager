@@ -12,6 +12,7 @@ data class ScheduleData(
     val end: String,
     val description: String,
     val isCompleted: Boolean = false,
-    // ★追加: Googleカレンダーの色ID
-    val colorId: String? = null
+    val colorId: String? = null,
+    // ★追加: どのアカウントの予定かを識別する
+    val accountEmail: String = ""
 )

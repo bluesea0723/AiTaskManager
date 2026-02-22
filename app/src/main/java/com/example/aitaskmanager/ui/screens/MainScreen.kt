@@ -1,7 +1,5 @@
 package com.example.aitaskmanager.ui.screens
 
-import android.accounts.Account
-import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.EnterTransition
@@ -21,6 +19,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.api.services.calendar.CalendarScopes
@@ -30,35 +29,31 @@ fun MainScreen() {
     val context = LocalContext.current
     val navController = rememberNavController()
 
-    // SharedPreferencesから保存されたメールアドレスのリストを取得
-    val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-    var accountEmails by remember {
-        mutableStateOf(prefs.getStringSet("saved_accounts", emptySet())?.toList() ?: emptyList())
-    }
+    // ★複数アカウントを保持するリストに変更
+    val accounts = remember { mutableStateListOf<GoogleSignInAccount>() }
 
-    // メールアドレスから Account オブジェクトのリストを生成
-    val signedInAccounts = accountEmails.map { Account(it, "com.google") }
+    // 起動時に前回ログインしていたアカウントがあれば追加
+    LaunchedEffect(Unit) {
+        val account = GoogleSignIn.getLastSignedInAccount(context)
+        if (account != null && accounts.none { it.email == account.email }) {
+            accounts.add(account)
+        }
+    }
 
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
-            val account = task.getResult(ApiException::class.java)
-            // 取得したメールアドレスを保存
-            account.email?.let { email ->
-                if (!accountEmails.contains(email)) {
-                    val newList = accountEmails + email
-                    accountEmails = newList
-                    prefs.edit().putStringSet("saved_accounts", newList.toSet()).apply()
-                }
+            val newAccount = task.getResult(ApiException::class.java)
+            if (newAccount != null && accounts.none { it.email == newAccount.email }) {
+                accounts.add(newAccount)
             }
         } catch (e: ApiException) {
             e.printStackTrace()
         }
     }
 
-    // ★修正: 変数宣言に `: () -> Unit` を追加し、戻り値の型を明示的に指定します
     val onLoginClick: () -> Unit = {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
@@ -66,7 +61,7 @@ fun MainScreen() {
             .build()
         val client = GoogleSignIn.getClient(context, gso)
 
-        // 別のアカウントを追加できるように、一度内部的にサインアウトしてからログイン画面を開く
+        // ★別のアカウントを追加できるように、一度サインアウトを挟んでからIntentを起動
         client.signOut().addOnCompleteListener {
             googleSignInLauncher.launch(client.signInIntent)
         }
@@ -112,26 +107,22 @@ fun MainScreen() {
         ) {
             composable("chat") {
                 Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
-                    ChatScreen(
-                        accounts = signedInAccounts,
-                        onLoginClick = onLoginClick,
-                        bottomPadding = innerPadding.calculateBottomPadding()
-                    )
+                    ChatScreen(accounts = accounts, onLoginClick = onLoginClick, bottomPadding = innerPadding.calculateBottomPadding())
                 }
             }
             composable("goal") {
                 Box(modifier = Modifier.padding(innerPadding)) {
-                    GoalScreen(accounts = signedInAccounts)
+                    GoalScreen(accounts = accounts)
                 }
             }
             composable("daily") {
                 Box(modifier = Modifier.padding(innerPadding)) {
-                    DailyScreen(accounts = signedInAccounts)
+                    DailyScreen(accounts = accounts)
                 }
             }
             composable("monthly") {
                 Box(modifier = Modifier.padding(innerPadding)) {
-                    MonthlyScreen(accounts = signedInAccounts)
+                    MonthlyScreen(accounts = accounts)
                 }
             }
         }

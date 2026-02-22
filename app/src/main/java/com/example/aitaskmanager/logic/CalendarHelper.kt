@@ -1,9 +1,9 @@
 package com.example.aitaskmanager.logic
 
-import android.accounts.Account
 import android.content.Context
 import com.example.aitaskmanager.data.AppDatabase
 import com.example.aitaskmanager.data.ScheduleData
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
@@ -15,6 +15,8 @@ import com.google.api.services.calendar.model.EventDateTime
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import java.util.TimeZone
 
@@ -22,8 +24,16 @@ class CalendarHelper {
 
     private fun getDao(context: Context) = AppDatabase.getDatabase(context).scheduleDao()
 
-    // 1. 日表示用のデータ取得
-    suspend fun fetchDailyEvents(context: Context, accounts: List<Account>, year: Int, month: Int, day: Int, forceRefresh: Boolean = false): List<ScheduleData> {
+    // 1. 日表示用のデータ取得 (複数アカウント対応)
+    suspend fun fetchDailyEvents(
+        context: Context,
+        accounts: List<GoogleSignInAccount>,
+        year: Int,
+        month: Int,
+        day: Int,
+        forceRefresh: Boolean = false
+    ): List<ScheduleData> {
+        if (accounts.isEmpty()) return emptyList()
         return withContext(Dispatchers.IO) {
             try {
                 val (startStr, endStr) = getRangeStrings(year, month, day, 1, java.util.Calendar.DAY_OF_MONTH)
@@ -34,22 +44,21 @@ class CalendarHelper {
                     if (cached.isNotEmpty()) return@withContext cached
                 }
 
-                // 全てのアカウントから予定を取得してマージする
-                val allEventsFromApi = mutableListOf<ScheduleData>()
-                for (account in accounts) {
-                    val events = fetchFromApi(context, account, year, month, day, java.util.Calendar.DAY_OF_MONTH)
-                    allEventsFromApi.addAll(events)
+                // 全アカウントから非同期で並列取得
+                val deferredEvents = accounts.map { account ->
+                    async { fetchFromApi(context, account, year, month, day, java.util.Calendar.DAY_OF_MONTH) }
                 }
+                val eventsFromApi = deferredEvents.awaitAll().flatten()
 
                 val existingEvents = dao.getEventsInRange(startStr, endStr)
                 val completedIds = existingEvents.filter { it.isCompleted }.map { it.id }.toSet()
 
-                val mergedEvents = allEventsFromApi.map { event ->
+                val mergedEvents = eventsFromApi.map { event ->
                     if (event.id in completedIds) event.copy(isCompleted = true) else event
                 }
 
                 dao.insertAll(mergedEvents)
-                mergedEvents.sortedBy { it.start }
+                mergedEvents
             } catch (e: Exception) {
                 e.printStackTrace()
                 emptyList()
@@ -57,8 +66,15 @@ class CalendarHelper {
         }
     }
 
-    // 2. 月表示用のデータ取得
-    suspend fun fetchMonthlyEvents(context: Context, accounts: List<Account>, year: Int, month: Int, forceRefresh: Boolean = false): List<ScheduleData> {
+    // 2. 月表示用のデータ取得 (複数アカウント対応)
+    suspend fun fetchMonthlyEvents(
+        context: Context,
+        accounts: List<GoogleSignInAccount>,
+        year: Int,
+        month: Int,
+        forceRefresh: Boolean = false
+    ): List<ScheduleData> {
+        if (accounts.isEmpty()) return emptyList()
         return withContext(Dispatchers.IO) {
             try {
                 val (startStr, endStr) = getRangeStrings(year, month, 1, 1, java.util.Calendar.MONTH)
@@ -66,27 +82,23 @@ class CalendarHelper {
 
                 if (!forceRefresh) {
                     val cached = dao.getEventsInRange(startStr, endStr)
-                    if (cached.isNotEmpty()) {
-                        return@withContext cached
-                    }
+                    if (cached.isNotEmpty()) return@withContext cached
                 }
 
-                // 全てのアカウントから予定を取得してマージする
-                val allEventsFromApi = mutableListOf<ScheduleData>()
-                for (account in accounts) {
-                    val events = fetchFromApi(context, account, year, month, 1, java.util.Calendar.MONTH)
-                    allEventsFromApi.addAll(events)
+                val deferredEvents = accounts.map { account ->
+                    async { fetchFromApi(context, account, year, month, 1, java.util.Calendar.MONTH) }
                 }
+                val eventsFromApi = deferredEvents.awaitAll().flatten()
 
                 val existingEvents = dao.getEventsInRange(startStr, endStr)
                 val completedIds = existingEvents.filter { it.isCompleted }.map { it.id }.toSet()
 
-                val mergedEvents = allEventsFromApi.map { event ->
+                val mergedEvents = eventsFromApi.map { event ->
                     if (event.id in completedIds) event.copy(isCompleted = true) else event
                 }
 
                 dao.insertAll(mergedEvents)
-                mergedEvents.sortedBy { it.start }
+                mergedEvents
             } catch (e: Exception) {
                 e.printStackTrace()
                 emptyList()
@@ -108,7 +120,7 @@ class CalendarHelper {
         }
     }
 
-    suspend fun deleteEvent(context: Context, account: Account, schedule: ScheduleData): Boolean {
+    suspend fun deleteEvent(context: Context, account: GoogleSignInAccount, schedule: ScheduleData): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 try {
@@ -126,8 +138,9 @@ class CalendarHelper {
         }
     }
 
-    // --- API通信の実処理 (共通化) ---
-    private fun fetchFromApi(context: Context, account: Account, year: Int, month: Int, day: Int, field: Int): List<ScheduleData> {
+    private fun fetchFromApi(
+        context: Context, account: GoogleSignInAccount, year: Int, month: Int, day: Int, field: Int
+    ): List<ScheduleData> {
         val service = getCalendarService(context, account)
         val jstZone = TimeZone.getTimeZone("Asia/Tokyo")
 
@@ -147,7 +160,7 @@ class CalendarHelper {
             .setSingleEvents(true)
             .execute()
 
-        return convertEventsToScheduleData(events.items ?: emptyList())
+        return convertEventsToScheduleData(events.items ?: emptyList(), account.email ?: "")
     }
 
     private fun getRangeStrings(year: Int, month: Int, day: Int, amount: Int, field: Int): Pair<String, String> {
@@ -165,48 +178,44 @@ class CalendarHelper {
         return startStr to endStr
     }
 
-    // ==========================================
-    //  AI相談・登録用
-    // ==========================================
-
     fun getTodayDate(): String {
         val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd (E)", java.util.Locale.JAPAN)
         dateFormat.timeZone = TimeZone.getTimeZone("Asia/Tokyo")
         return dateFormat.format(java.util.Date())
     }
 
-    suspend fun fetchEvents(context: Context, accounts: List<Account>): String {
+    // AI用：全アカウントの予定テキストを取得
+    suspend fun fetchEvents(context: Context, accounts: List<GoogleSignInAccount>): String {
+        if (accounts.isEmpty()) return "予定はありません。"
         return withContext(Dispatchers.IO) {
             try {
+                val sb = StringBuilder("【今後1週間の予定】\n")
                 val jstZone = TimeZone.getTimeZone("Asia/Tokyo")
-                val calendar = java.util.Calendar.getInstance(jstZone).apply {
-                    set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
-                }
-                val startDateTime = DateTime(calendar.time)
-                calendar.add(java.util.Calendar.DAY_OF_MONTH, 7)
-                val endDateTime = DateTime(calendar.time)
+                val format = java.text.SimpleDateFormat("MM/dd(E) HH:mm", java.util.Locale.JAPAN).apply { timeZone = jstZone }
+                val dayFormat = java.text.SimpleDateFormat("MM/dd(E)", java.util.Locale.JAPAN).apply { timeZone = jstZone }
 
-                val allItems = mutableListOf<Event>()
+                val deferredEvents = accounts.map { account ->
+                    async {
+                        val service = getCalendarService(context, account)
+                        val calendar = java.util.Calendar.getInstance(jstZone).apply {
+                            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+                        }
+                        val startDateTime = DateTime(calendar.time)
+                        calendar.add(java.util.Calendar.DAY_OF_MONTH, 7)
+                        val endDateTime = DateTime(calendar.time)
 
-                for (account in accounts) {
-                    val service = getCalendarService(context, account)
-                    val apiEvents = service.events().list("primary")
-                        .setTimeMin(startDateTime).setTimeMax(endDateTime)
-                        .setOrderBy("startTime").setSingleEvents(true).execute()
-                    apiEvents.items?.let { allItems.addAll(it) }
+                        val apiEvents = service.events().list("primary")
+                            .setTimeMin(startDateTime).setTimeMax(endDateTime)
+                            .setOrderBy("startTime").setSingleEvents(true).execute()
+                        apiEvents.items ?: emptyList()
+                    }
                 }
+
+                val allItems = deferredEvents.awaitAll().flatten().sortedBy { it.start?.dateTime?.value ?: it.start?.date?.value }
 
                 if (allItems.isEmpty()) {
-                    "今後1週間の予定はありません。"
+                    return@withContext "今後1週間の予定はありません。"
                 } else {
-                    // 時間順にソート
-                    allItems.sortBy { it.start.dateTime?.value ?: it.start.date?.value ?: 0L }
-
-                    val sb = StringBuilder("【今後1週間の予定】\n")
-                    val format = java.text.SimpleDateFormat("MM/dd(E) HH:mm", java.util.Locale.JAPAN)
-                    format.timeZone = jstZone
-                    val dayFormat = java.text.SimpleDateFormat("MM/dd(E)", java.util.Locale.JAPAN)
-                    dayFormat.timeZone = jstZone
                     for (event in allItems) {
                         val start = event.start.dateTime
                         val date = event.start.date
@@ -233,9 +242,7 @@ class CalendarHelper {
         }
     }
 
-    suspend fun addEventToCalendar(context: Context, accounts: List<Account>, schedule: ScheduleData): Boolean {
-        if (accounts.isEmpty()) return false
-        val account = accounts.first() // ★メインアカウント(最初に追加したもの)に追加する
+    suspend fun addEventToCalendar(context: Context, account: GoogleSignInAccount, schedule: ScheduleData): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val service = getCalendarService(context, account)
@@ -256,7 +263,7 @@ class CalendarHelper {
                 val createdEvent = service.events().insert("primary", event).execute()
 
                 if (createdEvent != null) {
-                    val newScheduleData = convertEventsToScheduleData(listOf(createdEvent)).first()
+                    val newScheduleData = convertEventsToScheduleData(listOf(createdEvent), account.email ?: "").first()
                     getDao(context).insert(newScheduleData)
                 }
                 true
@@ -267,18 +274,14 @@ class CalendarHelper {
         }
     }
 
-    // ==========================================
-    //  共通ユーティリティ
-    // ==========================================
-
-    private fun getCalendarService(context: Context, account: Account): Calendar {
+    private fun getCalendarService(context: Context, account: GoogleSignInAccount): Calendar {
         val credential = GoogleAccountCredential.usingOAuth2(context, listOf(CalendarScopes.CALENDAR))
-        credential.selectedAccount = account
+        credential.selectedAccount = account.account
         return Calendar.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
             .setApplicationName("AiTaskManager").build()
     }
 
-    private fun convertEventsToScheduleData(items: List<Event>): List<ScheduleData> {
+    private fun convertEventsToScheduleData(items: List<Event>, accountEmail: String): List<ScheduleData> {
         val list = mutableListOf<ScheduleData>()
         for (event in items) {
             val startStr = event.start.dateTime?.toString() ?: "${event.start.date}T00:00:00+09:00"
@@ -291,10 +294,21 @@ class CalendarHelper {
                     start = startStr,
                     end = endStr,
                     description = event.description ?: "",
-                    isCompleted = false // デフォルトは未完了
+                    isCompleted = false,
+                    colorId = event.colorId,
+                    accountEmail = accountEmail // ★追加
                 )
             )
         }
         return list
+    }
+
+    fun getEventColor(colorId: String?): Long {
+        return when (colorId) {
+            "1" -> 0xFF7986CB; "2" -> 0xFF33B679; "3" -> 0xFF8E24AA; "4" -> 0xFFE67C73
+            "5" -> 0xFFF6BF26; "6" -> 0xFFF4511E; "7" -> 0xFF039BE5; "8" -> 0xFF616161
+            "9" -> 0xFF3F51B5; "10" -> 0xFF0B8043; "11" -> 0xFFD50000
+            else -> 0xFF039BE5
+        }
     }
 }

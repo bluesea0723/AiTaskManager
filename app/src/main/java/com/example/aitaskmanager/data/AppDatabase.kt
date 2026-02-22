@@ -43,8 +43,8 @@ interface ChatMessageDao {
 }
 
 // ▼ Database
-// ★修正: version を 3 に変更
-@Database(entities = [ScheduleData::class, ChatMessage::class], version = 4, exportSchema = false)
+// ★修正: version を 5 に変更
+@Database(entities = [ScheduleData::class, ChatMessage::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun scheduleDao(): ScheduleDao
     abstract fun chatMessageDao(): ChatMessageDao
