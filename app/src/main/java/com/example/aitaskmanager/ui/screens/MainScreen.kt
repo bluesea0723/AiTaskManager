@@ -1,5 +1,7 @@
 package com.example.aitaskmanager.ui.screens
 
+import android.accounts.Account
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.EnterTransition
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -18,41 +21,55 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.api.services.calendar.CalendarScopes
-import androidx.compose.material.icons.filled.Flag // 目標アイコン用
-import android.accounts.Account
-import android.content.Context
 
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
     val navController = rememberNavController()
 
-    var signedInAccount by remember {
-        mutableStateOf(GoogleSignIn.getLastSignedInAccount(context))
+    // SharedPreferencesから保存されたメールアドレスのリストを取得
+    val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+    var accountEmails by remember {
+        mutableStateOf(prefs.getStringSet("saved_accounts", emptySet())?.toList() ?: emptyList())
     }
+
+    // メールアドレスから Account オブジェクトのリストを生成
+    val signedInAccounts = accountEmails.map { Account(it, "com.google") }
 
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
-            signedInAccount = task.getResult(ApiException::class.java)
+            val account = task.getResult(ApiException::class.java)
+            // 取得したメールアドレスを保存
+            account.email?.let { email ->
+                if (!accountEmails.contains(email)) {
+                    val newList = accountEmails + email
+                    accountEmails = newList
+                    prefs.edit().putStringSet("saved_accounts", newList.toSet()).apply()
+                }
+            }
         } catch (e: ApiException) {
             e.printStackTrace()
         }
     }
 
-    val onLoginClick = {
+    // ★修正: 変数宣言に `: () -> Unit` を追加し、戻り値の型を明示的に指定します
+    val onLoginClick: () -> Unit = {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(com.google.android.gms.common.api.Scope(CalendarScopes.CALENDAR))
             .build()
         val client = GoogleSignIn.getClient(context, gso)
-        googleSignInLauncher.launch(client.signInIntent)
+
+        // 別のアカウントを追加できるように、一度内部的にサインアウトしてからログイン画面を開く
+        client.signOut().addOnCompleteListener {
+            googleSignInLauncher.launch(client.signInIntent)
+        }
     }
 
     Scaffold(
@@ -64,7 +81,6 @@ fun MainScreen() {
                     selected = navController.currentDestination?.route == "chat",
                     onClick = { navController.navigate("chat") }
                 )
-                // ★追加: 目標タブ
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Flag, contentDescription = "Goal") },
                     label = { Text("目標") },
@@ -86,7 +102,6 @@ fun MainScreen() {
             }
         }
     ) { innerPadding ->
-        // ★ここを修正！ Boxで囲まず、各画面で余白を調整する
         NavHost(
             navController = navController,
             startDestination = "chat",
@@ -96,31 +111,27 @@ fun MainScreen() {
             popExitTransition = { ExitTransition.None }
         ) {
             composable("chat") {
-                // チャット画面: 上の余白は適用するが、下の余白は「値だけ」渡す
                 Box(modifier = Modifier.padding(top = innerPadding.calculateTopPadding())) {
                     ChatScreen(
-                        account = signedInAccount,
+                        accounts = signedInAccounts,
                         onLoginClick = onLoginClick,
-                        bottomPadding = innerPadding.calculateBottomPadding() // 下の余白を渡す
+                        bottomPadding = innerPadding.calculateBottomPadding()
                     )
                 }
             }
-            // ★追加: 目標画面
             composable("goal") {
                 Box(modifier = Modifier.padding(innerPadding)) {
-                    GoalScreen(account = signedInAccount)
+                    GoalScreen(accounts = signedInAccounts)
                 }
             }
             composable("daily") {
-                // その他の画面: 上下左右の余白を普通に適用
                 Box(modifier = Modifier.padding(innerPadding)) {
-                    DailyScreen(account = signedInAccount)
+                    DailyScreen(accounts = signedInAccounts)
                 }
             }
             composable("monthly") {
-                // その他の画面: 上下左右の余白を普通に適用
                 Box(modifier = Modifier.padding(innerPadding)) {
-                    MonthlyScreen(account = signedInAccount)
+                    MonthlyScreen(accounts = signedInAccounts)
                 }
             }
         }

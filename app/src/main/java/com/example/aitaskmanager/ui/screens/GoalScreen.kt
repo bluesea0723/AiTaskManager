@@ -1,5 +1,6 @@
 package com.example.aitaskmanager.ui.screens
 
+import android.accounts.Account
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -24,7 +25,6 @@ import androidx.compose.ui.unit.sp
 import com.example.aitaskmanager.data.ScheduleData
 import com.example.aitaskmanager.logic.CalendarHelper
 import com.example.aitaskmanager.logic.GeminiHelper
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -32,33 +32,28 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GoalScreen(account: GoogleSignInAccount?) {
+fun GoalScreen(accounts: List<Account>) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    // ロジッククラス
     val geminiHelper = remember { GeminiHelper() }
     val calendarHelper = remember { CalendarHelper() }
 
-    // --- ステート管理 ---
-    var step by remember { mutableIntStateOf(1) } // 1:分析入力, 2:条件設定, 3:プレビュー&修正
+    var step by remember { mutableIntStateOf(1) }
     var isLoading by remember { mutableStateOf(false) }
 
-    // Step 1: 目標と現状
-    var goalText by remember { mutableStateOf("") }      // 目標
-    var currentStatus by remember { mutableStateOf("") } // 現状スコアなど
-    var resources by remember { mutableStateOf("") }     // 参考書など
+    var goalText by remember { mutableStateOf("") }
+    var currentStatus by remember { mutableStateOf("") }
+    var resources by remember { mutableStateOf("") }
     var deadlineDate by remember { mutableStateOf(Calendar.getInstance().apply { add(Calendar.MONTH, 1) }.timeInMillis) }
     var showDatePicker by remember { mutableStateOf(false) }
 
-    // Step 2: 分析結果と希望
-    var analysisResult by remember { mutableStateOf("") } // AIからの分析コメント
-    var userAvailability by remember { mutableStateOf("") } // ユーザーの希望時間帯
+    var analysisResult by remember { mutableStateOf("") }
+    var userAvailability by remember { mutableStateOf("") }
 
-    // Step 3: ドラフト（下書き）
     var draftSchedules by remember { mutableStateOf<List<ScheduleData>>(emptyList()) }
-    var feedbackText by remember { mutableStateOf("") } // 修正指示
+    var feedbackText by remember { mutableStateOf("") }
 
     val dateFormatter = SimpleDateFormat("yyyy/MM/dd", Locale.JAPAN)
 
@@ -69,7 +64,6 @@ fun GoalScreen(account: GoogleSignInAccount?) {
             .padding(16.dp)
             .verticalScroll(scrollState)
     ) {
-        // ヘッダー（進捗バー的なもの）
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -87,7 +81,6 @@ fun GoalScreen(account: GoogleSignInAccount?) {
         } else {
             when (step) {
                 1 -> {
-                    // --- Step 1: 目標と現状の入力 ---
                     Text("目標と現状を教えてください", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -122,12 +115,11 @@ fun GoalScreen(account: GoogleSignInAccount?) {
                             if (goalText.isBlank()) return@Button
                             scope.launch {
                                 isLoading = true
-                                // 分析を実行
                                 analysisResult = geminiHelper.analyzeGoal(
                                     goalText, currentStatus, resources, dateFormatter.format(deadlineDate)
                                 )
                                 isLoading = false
-                                step = 2 // 次へ
+                                step = 2
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -139,7 +131,6 @@ fun GoalScreen(account: GoogleSignInAccount?) {
                 }
 
                 2 -> {
-                    // --- Step 2: 分析結果確認 & 希望入力 ---
                     Text("AIによる分析結果", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
@@ -164,15 +155,13 @@ fun GoalScreen(account: GoogleSignInAccount?) {
                         onClick = {
                             scope.launch {
                                 isLoading = true
-                                // 既存の予定を取得
-                                val existingEvents = if (account != null) calendarHelper.fetchEvents(context, account) else ""
-                                // スケジュール案を作成
+                                val existingEvents = if (accounts.isNotEmpty()) calendarHelper.fetchEvents(context, accounts) else ""
                                 val json = geminiHelper.generateDraftPlan(
                                     goalText, dateFormatter.format(deadlineDate), analysisResult, userAvailability, existingEvents
                                 )
                                 draftSchedules = calendarHelper.parseJson(json)
                                 isLoading = false
-                                step = 3 // 次へ
+                                step = 3
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
@@ -183,13 +172,11 @@ fun GoalScreen(account: GoogleSignInAccount?) {
                 }
 
                 3 -> {
-                    // --- Step 3: プレビュー & 修正 & 登録 ---
                     Text("スケジュール案の確認", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text("カレンダー形式で確認できます。修正したい場合は下の欄に入力してください。", style = MaterialTheme.typography.bodySmall)
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // 簡易カレンダープレビュー
                     if (draftSchedules.isNotEmpty()) {
                         DraftPreviewCalendar(draftSchedules)
                     } else {
@@ -198,7 +185,6 @@ fun GoalScreen(account: GoogleSignInAccount?) {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 修正指示エリア
                     OutlinedTextField(
                         value = feedbackText,
                         onValueChange = { feedbackText = it },
@@ -207,18 +193,16 @@ fun GoalScreen(account: GoogleSignInAccount?) {
                     )
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // 再生成ボタン
                         OutlinedButton(
                             onClick = {
                                 scope.launch {
                                     isLoading = true
-                                    val existingEvents = if (account != null) calendarHelper.fetchEvents(context, account) else ""
-                                    // 修正指示を含めて再生成
+                                    val existingEvents = if (accounts.isNotEmpty()) calendarHelper.fetchEvents(context, accounts) else ""
                                     val json = geminiHelper.generateDraftPlan(
                                         goalText, dateFormatter.format(deadlineDate), analysisResult, userAvailability, existingEvents, feedbackText
                                     )
                                     draftSchedules = calendarHelper.parseJson(json)
-                                    feedbackText = "" // リセット
+                                    feedbackText = ""
                                     isLoading = false
                                 }
                             },
@@ -227,23 +211,20 @@ fun GoalScreen(account: GoogleSignInAccount?) {
                             Text("修正して再作成")
                         }
 
-                        // 確定ボタン
                         Button(
                             onClick = {
                                 scope.launch {
-                                    if (account != null) {
+                                    if (accounts.isNotEmpty()) {
                                         isLoading = true
                                         var count = 0
                                         draftSchedules.forEach {
-                                            if (calendarHelper.addEventToCalendar(context, account, it)) count++
+                                            if (calendarHelper.addEventToCalendar(context, accounts, it)) count++
                                         }
                                         isLoading = false
-                                        // 完了したら最初に戻るか、ダイアログを出す（ここではリセット）
                                         step = 1
                                         goalText = ""
                                         currentStatus = ""
                                         draftSchedules = emptyList()
-                                        // TODO: 完了メッセージを表示すると親切
                                     }
                                 }
                             },
@@ -257,7 +238,6 @@ fun GoalScreen(account: GoogleSignInAccount?) {
             }
         }
 
-        // DatePickerダイアログ
         if (showDatePicker) {
             val datePickerState = rememberDatePickerState(initialSelectedDateMillis = deadlineDate)
             DatePickerDialog(
@@ -273,7 +253,6 @@ fun GoalScreen(account: GoogleSignInAccount?) {
     }
 }
 
-// ステップ表示用の小さなコンポーネント
 @Composable
 fun StepIndicator(stepNum: Int, label: String, currentStep: Int) {
     val isActive = stepNum <= currentStep
@@ -291,10 +270,8 @@ fun StepIndicator(stepNum: Int, label: String, currentStep: Int) {
     }
 }
 
-// ドラフト確認用の簡易カレンダー
 @Composable
 fun DraftPreviewCalendar(schedules: List<ScheduleData>) {
-    // 最初の予定の月を表示（簡易化のため）
     val firstEvent = schedules.firstOrNull() ?: return
     val year = firstEvent.start.substring(0, 4).toIntOrNull() ?: 2026
     val month = firstEvent.start.substring(5, 7).toIntOrNull() ?: 1
@@ -307,7 +284,6 @@ fun DraftPreviewCalendar(schedules: List<ScheduleData>) {
             Text("${year}年 ${month}月のイメージ", style = MaterialTheme.typography.titleSmall)
             Spacer(modifier = Modifier.height(4.dp))
 
-            // 簡易カレンダーグリッド（MonthlyScreenのロジックを流用・簡略化）
             val cal = Calendar.getInstance().apply { set(year, month - 1, 1) }
             val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
             val firstDayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
@@ -320,7 +296,6 @@ fun DraftPreviewCalendar(schedules: List<ScheduleData>) {
                 items(cells) { dayStr ->
                     if (dayStr.isNotEmpty()) {
                         val dayInt = dayStr.toInt()
-                        // その日の予定があるか？
                         val dayEvents = schedules.filter {
                             it.start.startsWith("%04d-%02d-%02d".format(year, month, dayInt))
                         }
@@ -335,7 +310,6 @@ fun DraftPreviewCalendar(schedules: List<ScheduleData>) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(dayStr, fontSize = 10.sp)
                                 if (dayEvents.isNotEmpty()) {
-                                    // 予定があれば丸印などをつける
                                     Surface(
                                         color = MaterialTheme.colorScheme.primaryContainer,
                                         shape = RoundedCornerShape(2.dp),
